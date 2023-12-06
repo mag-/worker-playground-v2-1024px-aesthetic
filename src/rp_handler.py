@@ -4,7 +4,6 @@ Contains the handler function that will be called by the serverless.
 
 import os
 import base64
-import concurrent.futures
 
 import torch
 from diffusers import StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline
