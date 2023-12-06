@@ -109,7 +109,6 @@ def generate_image(job):
         width=job_input['width'],
         num_inference_steps=job_input['num_inference_steps'],
         guidance_scale=job_input['guidance_scale'],
-        output_type="latent",
         num_images_per_prompt=job_input['num_images'],
         generator=generator
     ).images
