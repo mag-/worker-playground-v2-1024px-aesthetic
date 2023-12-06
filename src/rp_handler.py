@@ -15,7 +15,9 @@ from diffusers import (
     LMSDiscreteScheduler,
     DDIMScheduler,
     EulerDiscreteScheduler,
+    EulerAncestralDiscreteScheduler,
     DPMSolverMultistepScheduler,
+    DiffusionPipeline,
 )
 
 import runpod
@@ -34,29 +36,15 @@ class ModelHandler:
         self.load_models()
 
     def load_base(self):
-        base_pipe = StableDiffusionXLPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-xl-base-1.0",
+        base_pipe = DiffusionPipeline.from_pretrained(
+            "playgroundai/playground-v2-1024px-aesthetic",
             torch_dtype=torch.float16, variant="fp16", use_safetensors=True, add_watermarker=False
         ).to("cuda", silence_dtype_warnings=True)
         base_pipe.enable_xformers_memory_efficient_attention()
         return base_pipe
 
-
-    def load_refiner(self):
-        refiner_pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-xl-refiner-1.0",
-            torch_dtype=torch.float16, variant="fp16", use_safetensors=True, add_watermarker=False
-        ).to("cuda", silence_dtype_warnings=True)
-        refiner_pipe.enable_xformers_memory_efficient_attention()
-        return refiner_pipe
-
     def load_models(self):
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future_base = executor.submit(self.load_base)
-            future_refiner = executor.submit(self.load_refiner)
-
-            self.base = future_base.result()
-            self.refiner = future_refiner.result()
+        self.base = self.load_base()
 
 MODELS = ModelHandler()
 
@@ -85,6 +73,7 @@ def make_scheduler(name, config):
         "PNDM": PNDMScheduler.from_config(config),
         "KLMS": LMSDiscreteScheduler.from_config(config),
         "DDIM": DDIMScheduler.from_config(config),
+        "K_EULER_ANCESTRAL": EulerAncestralDiscreteScheduler.from_config(config),
         "K_EULER": EulerDiscreteScheduler.from_config(config),
         "DPMSolverMultistep": DPMSolverMultistepScheduler.from_config(config),
     }[name]
@@ -113,38 +102,18 @@ def generate_image(job):
 
     MODELS.base.scheduler = make_scheduler(job_input['scheduler'], MODELS.base.scheduler.config)
 
-    if starting_image:  # If image_url is provided, run only the refiner pipeline
-        init_image = load_image(starting_image).convert("RGB")
-        output = MODELS.refiner(
-            prompt=job_input['prompt'],
-            num_inference_steps=job_input['refiner_inference_steps'],
-            strength=job_input['strength'],
-            image=init_image,
-            generator=generator
-        ).images
-    else:
-        # Generate latent image using pipe
-        image = MODELS.base(
-            prompt=job_input['prompt'],
-            negative_prompt=job_input['negative_prompt'],
-            height=job_input['height'],
-            width=job_input['width'],
-            num_inference_steps=job_input['num_inference_steps'],
-            guidance_scale=job_input['guidance_scale'],
-            output_type="latent",
-            num_images_per_prompt=job_input['num_images'],
-            generator=generator
-        ).images
-
-        # Refine the image using refiner with refiner_inference_steps
-        output = MODELS.refiner(
-            prompt=job_input['prompt'],
-            num_inference_steps=job_input['refiner_inference_steps'],
-            strength=job_input['strength'],
-            image=image,
-            num_images_per_prompt=job_input['num_images'],
-            generator=generator
-        ).images
+    # Generate latent image using pipe
+    output = MODELS.base(
+        prompt=job_input['prompt'],
+        negative_prompt=job_input['negative_prompt'],
+        height=job_input['height'],
+        width=job_input['width'],
+        num_inference_steps=job_input['num_inference_steps'],
+        guidance_scale=job_input['guidance_scale'],
+        output_type="latent",
+        num_images_per_prompt=job_input['num_images'],
+        generator=generator
+    ).images
 
     image_urls = _save_and_upload_images(output, job['id'])
 
@@ -153,9 +122,6 @@ def generate_image(job):
         "image_url": image_urls[0],
         "seed": job_input['seed']
     }
-
-    if starting_image:
-        results['refresh_worker'] = True
 
     return results
 
